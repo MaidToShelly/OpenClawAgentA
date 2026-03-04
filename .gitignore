@@ -1,4 +1,24 @@
+# Workspace artifacts
 documents
 repos
 .env
 .openclaw
+
+# Dependencies and virtual environments
+node_modules/
+.venv/
+
+# Secrets and generated keys
+secrets/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Logs and temp files
+*.log
+*.tmp
+
+# OS cruft
+.DS_Store
+Thumbs.db
