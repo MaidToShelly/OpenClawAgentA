@@ -6,6 +6,7 @@
     "network": "mainnet",
     "tags": ["friend", "mainnet"],
     "notes": "Default recipient for hello-world action.",
+    "verified_by_zero_payment": true,
     "last_verified": "2026-03-04T00:00:00Z"
   }
 ]

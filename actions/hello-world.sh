@@ -5,7 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SECRETS_FILE="$ROOT_DIR/secrets/algorand-account.json"
 NETWORK="${HELLO_WORLD_NETWORK:-mainnet}"
 RECIPIENT="${HELLO_WORLD_RECIPIENT:-G3MSA75OZEJTCCENOJDLDJK7UD7E2K5DNC7FVHCNOV7E3I4DTXTOWDUIFQ}"
-NOTE_TEXT="${HELLO_WORLD_NOTE:-Hello Shelly}"
+DEFAULT_NOTE="Hello Shelly"
+
+if [[ -n "${HELLO_WORLD_NOTE:-}" ]]; then
+  NOTE_TEXT="$HELLO_WORLD_NOTE"
+elif [[ -n "${HELLO_WORLD_NAME:-}" ]]; then
+  NOTE_TEXT="Hello ${HELLO_WORLD_NAME}"
+else
+  NOTE_TEXT="$DEFAULT_NOTE"
+fi
 
 if [[ ! -f "$SECRETS_FILE" ]]; then
   echo "Secrets file not found at $SECRETS_FILE" >&2
