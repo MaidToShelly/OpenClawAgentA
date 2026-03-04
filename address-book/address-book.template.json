@@ -1,0 +1,11 @@
+[
+  {
+    "id": "example-shelly",
+    "label": "Shelly (primary)",
+    "address": "G3MSA75OZEJTCCENOJDLDJK7UD7E2K5DNC7FVHCNOV7E3I4DTXTOWDUIFQ",
+    "network": "mainnet",
+    "tags": ["friend", "mainnet"],
+    "notes": "Default recipient for hello-world action.",
+    "last_verified": "2026-03-04T00:00:00Z"
+  }
+]
