@@ -4,17 +4,19 @@ const fs = require('fs');
 const path = require('path');
 const algosdk = require('algosdk');
 const { poolUtils, Swap, SwapType } = require('@tinymanorg/tinyman-js-sdk');
-const { runSwap, summarizeQuote } = require('./trader-swap');
+const { runSwap, summarizeQuote, appendTradeLog } = require('./trader-swap');
 
 const ROOT = path.join(__dirname, '..');
 const TASKS_DIR = path.join(ROOT, 'roles', 'trader', 'tasks');
-const STATE_PATH = path.join(ROOT, 'portfolio', 'trader-state.json');
+const STATE_DIR = path.join(ROOT, 'portfolio');
+const DEFAULT_STATE_PATH = path.join(STATE_DIR, 'trader-state.json');
 const PAUSE_FLAG_PATH = path.join(ROOT, '.trader-paused');
 const TRADES_PATH = path.join(ROOT, 'portfolio', 'trades.json');
 const SECRETS_PATH = path.join(ROOT, 'secrets', 'algorand-account.json');
 const ALGOD_URL = 'https://mainnet-api.algonode.cloud';
 const DEFAULT_TASK_ID = 'tinyman-algo-wad';
 const POSITION_DUST = 1_000n; // 0.001 units (micro)
+const PAPER_DUST = 1_000n;
 
 async function main() {
   const args = parseArgs(process.argv);
@@ -43,7 +45,10 @@ async function main() {
   const algodClient = new algosdk.Algodv2('', ALGOD_URL, '');
 
   const task = loadTask(taskId);
-  const state = loadState(taskId);
+  const executionMode = (task.execution_mode || 'live').toLowerCase();
+  const isPaper = executionMode !== 'live';
+  const statePath = resolveStatePath(taskId, executionMode);
+  const state = loadState(statePath, taskId, executionMode);
 
   const assetIn = normalizeAsset(task.pair.asset_in);
   const assetOut = normalizeAsset(task.pair.asset_out);
@@ -51,8 +56,8 @@ async function main() {
   const pool = await poolUtils.v2.getPoolInfo({
     network: task.network,
     client: algodClient,
-    asset1ID: Number(task.pair.asset_out.id),
-    asset2ID: Number(task.pair.asset_in.id)
+    asset1ID: Math.min(Number(task.pair.asset_in.id), Number(task.pair.asset_out.id)),
+    asset2ID: Math.max(Number(task.pair.asset_in.id), Number(task.pair.asset_out.id))
   });
 
   const priceQuote = await Swap.v2.getQuote({
@@ -68,18 +73,21 @@ async function main() {
   const markPrice = Number(priceSummary.assetOutAmount) / Number(priceSummary.assetInAmount);
 
   const accountInfo = await algodClient.accountInformation(account.addr).do();
-  const holdings = extractHoldings({ info: accountInfo, assetOutId: assetOut.id });
-  const hasPosition = holdings.assetOutMicro > POSITION_DUST;
+  const holdings = isPaper
+    ? extractPaperHoldings(state)
+    : extractHoldings({ info: accountInfo, assetOutId: assetOut.id });
+  const hasPosition = isPaper
+    ? holdings.assetOutMicro > PAPER_DUST
+    : holdings.assetOutMicro > POSITION_DUST;
 
-  const now = new Date();
-  const updates = [];
-  const actions = [];
+  if (isPaper) {
+    state.position.open = holdings.assetOutMicro > PAPER_DUST;
+  }
 
-  if (hasPosition && !state.position.open) {
+  if (hasPosition && !state.position.open && !isPaper) {
     const bootstrap = bootstrapEntry(taskId, `${assetIn.symbol || assetIn.id}->${assetOut.symbol || assetOut.id}`);
     if (bootstrap) {
       state.position = { ...state.position, ...bootstrap, open: true };
-      updates.push('Bootstrapped open position from trade log');
     } else {
       state.position.open = true;
     }
@@ -89,6 +97,10 @@ async function main() {
     state.position.entry_timestamp = null;
     state.position.entry_txid = null;
   }
+
+  const now = new Date();
+  const updates = [];
+  const actions = [];
 
   const exitRule = task.strategy.exit_rule || {};
   const reentryRule = task.strategy.reentry_rule || {};
@@ -103,10 +115,27 @@ async function main() {
     const shouldTakeProfit = typeof profitTarget === 'number' && profitPct !== null && profitPct >= profitTarget;
 
     if (forceClose || shouldTakeProfit) {
-      if (holdings.assetOutMicro <= POSITION_DUST) {
+      const dustThreshold = isPaper ? PAPER_DUST : POSITION_DUST;
+      if (holdings.assetOutMicro <= dustThreshold) {
         actions.push('Skip close: position size under dust threshold');
       } else if (dryRun) {
-        actions.push(`DRY RUN: would close position (${holdings.assetOutMicro} micro ${assetOut.symbol}) reason=${forceClose ? 'force' : 'take_profit'}`);
+        actions.push(`DRY RUN: would close ${holdings.assetOutMicro.toString()} micro ${assetOut.symbol}`);
+      } else if (isPaper) {
+        await closePaperPosition({
+          state,
+          statePath,
+          task,
+          taskId,
+          markPrice,
+          holdings,
+          now,
+          executionMode,
+          pool,
+          algodClient,
+          assetIn,
+          assetOut,
+          actions
+        });
       } else {
         const closeResult = await runSwap({
           taskId,
@@ -134,16 +163,31 @@ async function main() {
         };
       }
     } else {
-      actions.push('Holding position (no exit conditions met)');
+      actions.push(isPaper ? '[paper] Holding position (no exit conditions met)' : 'Holding position (no exit conditions met)');
     }
   } else {
     const readyToOpen = shouldReenter({ state, reentryRule, markPrice, now, forceOpen });
     const minTrade = BigInt(task.strategy.min_trade_amount_micro_algo);
     if (readyToOpen) {
-      if (holdings.algoSpendable <= minTrade) {
+      if (!isPaper && holdings.algoSpendable <= minTrade) {
         actions.push('Skip open: insufficient spendable ALGO');
       } else if (dryRun) {
         actions.push(`DRY RUN: would open position with ${minTrade} micro ALGO`);
+      } else if (isPaper) {
+        await openPaperPosition({
+          state,
+          statePath,
+          task,
+          taskId,
+          now,
+          executionMode,
+          pool,
+          algodClient,
+          assetIn,
+          assetOut,
+          amountMicro: minTrade,
+          actions
+        });
       } else {
         const openResult = await runSwap({
           taskId,
@@ -164,28 +208,169 @@ async function main() {
         };
       }
     } else {
-      actions.push('No re-entry signal yet');
+      actions.push(isPaper ? '[paper] No re-entry signal yet' : 'No re-entry signal yet');
     }
   }
 
   state.last_check = now.toISOString();
   state.last_mark_price = markPrice;
-  saveState(state);
+  saveState(statePath, state);
 
-  const summary = [
-    `Trader manager @ ${now.toISOString()}`,
-    `- Mark price (WAD/ALGO): ${markPrice.toFixed(6)}`,
-    `- Holdings: ${Number(holdings.algoTotal) / 1_000_000} ALGO / ${Number(holdings.assetOutMicro) / 1_000_000} ${assetOut.symbol}`,
-    `- Position open: ${state.position.open ? 'yes' : 'no'}`,
-    ...updates.map((u) => `- ${u}`),
-    ...actions.map((a) => `- ${a}`)
-  ].join('\n');
+  const summaryLines = [
+    `Trader manager (${executionMode}) @ ${now.toISOString()}`
+  ];
+  if (isPaper) {
+    const paper = state.paper || { asset_out_micro: 0, algo_spent_micro: 0, algo_realized_micro: 0 };
+    const virtualAlgo = (paper.algo_realized_micro || 0) - (paper.algo_spent_micro || 0);
+    summaryLines.push(
+      `- Virtual ALGO PnL: ${(virtualAlgo / 1_000_000).toFixed(6)} (spent ${(paper.algo_spent_micro || 0) / 1_000_000}, realized ${(paper.algo_realized_micro || 0) / 1_000_000})`
+    );
+    summaryLines.push(`- Simulated holdings: ${(paper.asset_out_micro || 0) / 1_000_000} ${assetOut.symbol}`);
+  } else {
+    summaryLines.push(`- Holdings: ${Number(holdings.algoTotal) / 1_000_000} ALGO / ${Number(holdings.assetOutMicro) / 1_000_000} ${assetOut.symbol}`);
+  }
+  summaryLines.push(`- Position open: ${state.position.open ? 'yes' : 'no'}`);
+  updates.forEach((u) => summaryLines.push(`- ${u}`));
+  actions.forEach((a) => summaryLines.push(`- ${a}`));
 
+  const summary = summaryLines.join('\n');
   if (verbose || dryRun) {
     console.log(summary);
   } else {
     console.log(actions.join('\n'));
   }
+}
+
+async function openPaperPosition({
+  state,
+  statePath,
+  task,
+  taskId,
+  now,
+  executionMode,
+  pool,
+  algodClient,
+  assetIn,
+  assetOut,
+  amountMicro,
+  actions
+}) {
+  state.paper = state.paper || { asset_out_micro: 0, algo_spent_micro: 0, algo_realized_micro: 0 };
+  const slippage = task.strategy.slippage_tolerance_bps;
+  const quote = await getSwapQuote({
+    direction: 'forward',
+    pool,
+    task,
+    amountMicro,
+    slippageBps: slippage
+  });
+  state.paper.asset_out_micro += Number(quote.quoteSummary.assetOutAmount);
+  state.paper.algo_spent_micro += Number(amountMicro);
+  state.position = {
+    open: true,
+    entry_price: Number(quote.quoteSummary.assetOutAmount) / Number(amountMicro),
+    entry_timestamp: now.toISOString(),
+    entry_amount_in_micro: amountMicro.toString(),
+    entry_amount_out_micro: quote.quoteSummary.assetOutAmount.toString(),
+    entry_txid: `[paper-open-${Date.now()}]`
+  };
+  await appendTradeLog({
+    task,
+    quoteSummary: quote.quoteSummary,
+    amountMicro,
+    assetIn,
+    assetOut,
+    options: {
+      paper: true,
+      executionMode,
+      txidOverride: state.position.entry_txid,
+      timestamp: now.toISOString()
+    }
+  });
+  saveState(statePath, state);
+  actions.push('[paper] Opened virtual position');
+}
+
+async function closePaperPosition({
+  state,
+  statePath,
+  task,
+  taskId,
+  markPrice,
+  holdings,
+  now,
+  executionMode,
+  pool,
+  algodClient,
+  assetIn,
+  assetOut,
+  actions
+}) {
+  state.paper = state.paper || { asset_out_micro: 0, algo_spent_micro: 0, algo_realized_micro: 0 };
+  const amountMicro = holdings.assetOutMicro;
+  if (amountMicro <= PAPER_DUST) {
+    actions.push('[paper] Skip close: simulated position too small');
+    return;
+  }
+  const quote = await getSwapQuote({
+    direction: 'reverse',
+    pool,
+    task,
+    amountMicro,
+    slippageBps: task.strategy.slippage_tolerance_bps
+  });
+  state.paper.asset_out_micro = Math.max(0, state.paper.asset_out_micro - Number(amountMicro));
+  state.paper.algo_realized_micro += Number(quote.quoteSummary.assetOutAmount);
+  state.position = {
+    open: false,
+    entry_price: null,
+    entry_timestamp: null,
+    entry_amount_in_micro: null,
+    entry_amount_out_micro: null,
+    entry_txid: null
+  };
+  state.last_exit = {
+    timestamp: now.toISOString(),
+    price: markPrice,
+    reason: 'paper_take_profit',
+    txid: `[paper-close-${Date.now()}]`,
+    amount_in_micro: amountMicro.toString(),
+    amount_out_micro: quote.quoteSummary.assetOutAmount.toString()
+  };
+  await appendTradeLog({
+    task,
+    quoteSummary: quote.quoteSummary,
+    amountMicro,
+    assetIn: assetOut,
+    assetOut: assetIn,
+    options: {
+      paper: true,
+      executionMode,
+      txidOverride: state.last_exit.txid,
+      timestamp: now.toISOString()
+    }
+  });
+  saveState(statePath, state);
+  actions.push('[paper] Closed virtual position');
+}
+
+async function getSwapQuote({ direction, pool, task, amountMicro, slippageBps }) {
+  const normalizedDirection = direction === 'reverse' ? 'reverse' : 'forward';
+  const assetInDef = normalizedDirection === 'forward' ? task.pair.asset_in : task.pair.asset_out;
+  const assetOutDef = normalizedDirection === 'forward' ? task.pair.asset_out : task.pair.asset_in;
+  const assetIn = normalizeAsset(assetInDef);
+  const assetOut = normalizeAsset(assetOutDef);
+  const slippage = (typeof slippageBps === 'number' ? slippageBps : (task.strategy.slippage_tolerance_bps || 100)) / 10_000;
+  const quote = await Swap.v2.getQuote({
+    type: SwapType.FixedInput,
+    pool,
+    amount: BigInt(amountMicro),
+    assetIn,
+    assetOut,
+    network: task.network,
+    slippage
+  });
+  return { quoteSummary: summarizeQuote(quote), assetIn, assetOut };
 }
 
 function loadTask(taskId) {
@@ -196,26 +381,34 @@ function loadTask(taskId) {
   return JSON.parse(fs.readFileSync(taskPath, 'utf8'));
 }
 
-function loadState(taskId) {
-  if (!fs.existsSync(STATE_PATH)) {
+function resolveStatePath(taskId, executionMode) {
+  if (taskId === DEFAULT_TASK_ID && executionMode === 'live') {
+    return DEFAULT_STATE_PATH;
+  }
+  const safeMode = executionMode.replace(/[^a-z0-9_-]/gi, '') || 'mode';
+  return path.join(STATE_DIR, `${taskId}-${safeMode}-state.json`);
+}
+
+function loadState(statePath, taskId, executionMode) {
+  if (!fs.existsSync(statePath)) {
     return {
       task_id: taskId,
+      execution_mode: executionMode,
       position: { open: false },
       last_exit: null,
       last_check: null,
       last_mark_price: null
     };
   }
-  const data = JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
-  if (!data.task_id || data.task_id !== taskId) {
-    data.task_id = taskId;
-  }
+  const data = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  data.task_id = data.task_id || taskId;
+  data.execution_mode = executionMode;
   data.position = data.position || { open: false };
   return data;
 }
 
-function saveState(state) {
-  fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+function saveState(statePath, state) {
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 }
 
 function extractHoldings({ info, assetOutId }) {
@@ -232,10 +425,19 @@ function extractHoldings({ info, assetOutId }) {
   };
 }
 
+function extractPaperHoldings(state) {
+  const paper = state.paper || { asset_out_micro: 0, algo_spent_micro: 0, algo_realized_micro: 0 };
+  return {
+    algoTotal: BigInt((paper.algo_realized_micro || 0) - (paper.algo_spent_micro || 0)),
+    algoSpendable: 0n,
+    assetOutMicro: BigInt(paper.asset_out_micro || 0)
+  };
+}
+
 function bootstrapEntry(taskId, direction) {
   if (!fs.existsSync(TRADES_PATH)) return null;
   const trades = JSON.parse(fs.readFileSync(TRADES_PATH, 'utf8'))?.trades || [];
-  const last = [...trades].reverse().find((t) => t.task_id === taskId && t.direction === direction);
+  const last = [...trades].reverse().find((t) => t.task_id === taskId && t.direction === direction && !t.paper);
   if (!last) return null;
   const price = Number(last.output.amount_micro) / Number(last.input.amount_micro);
   return {

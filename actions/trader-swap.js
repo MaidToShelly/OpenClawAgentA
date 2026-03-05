@@ -131,7 +131,7 @@ async function runSwap(options = {}) {
 
   log('Swap executed:', execution.txnID);
 
-  await updateTradeLog({
+  await appendTradeLog({
     execution,
     task,
     quoteSummary,
@@ -186,18 +186,18 @@ async function ensureAssetOptIn({ algodClient, account, assetID }) {
   console.log(`Opted into asset ${assetID} (tx ${txId})`);
 }
 
-async function updateTradeLog({ execution, task, quoteSummary, amountMicro, assetIn, assetOut }) {
+async function appendTradeLog({ execution, task, quoteSummary, amountMicro, assetIn, assetOut, options = {} }) {
   if (!fs.existsSync(TRADES_PATH)) {
     fs.writeFileSync(TRADES_PATH, JSON.stringify({ trades: [] }, null, 2));
   }
   const trades = JSON.parse(fs.readFileSync(TRADES_PATH, 'utf8'));
-  trades.trades.push({
-    timestamp: new Date().toISOString(),
+  const entry = {
+    timestamp: options.timestamp || new Date().toISOString(),
     role: task.role,
     task_id: task.id,
     dex: task.dex,
     network: task.network,
-    txid: execution.txnID,
+    txid: options.txidOverride || execution?.txnID || null,
     direction: `${assetIn.symbol || assetIn.id}->${assetOut.symbol || assetOut.id}`,
     input: {
       asset_id: assetIn.id,
@@ -211,7 +211,14 @@ async function updateTradeLog({ execution, task, quoteSummary, amountMicro, asse
     },
     price_impact: quoteSummary.priceImpact,
     swap_fee_microalgo: quoteSummary.swapFee
-  });
+  };
+  if (options.paper) {
+    entry.paper = true;
+  }
+  if (options.executionMode) {
+    entry.execution_mode = options.executionMode;
+  }
+  trades.trades.push(entry);
   fs.writeFileSync(TRADES_PATH, JSON.stringify(trades, null, 2));
 }
 
@@ -345,5 +352,6 @@ if (require.main === module) {
 
 module.exports = {
   runSwap,
-  summarizeQuote
+  summarizeQuote,
+  appendTradeLog
 };
