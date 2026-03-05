@@ -8,6 +8,9 @@ repos
 node_modules/
 .venv/
 
+# Local overrides
+config/algorand-networks.local.json
+
 # Secrets and generated keys
 secrets/
 address-book/address-book.json
