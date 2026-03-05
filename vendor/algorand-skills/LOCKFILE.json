@@ -1,0 +1,45 @@
+{
+  "locked_at": "2026-03-05T00:41:52Z",
+  "skills": {
+    "call-smart-contracts": {
+      "repo": "algorand-devrel/algorand-agent-skills",
+      "tag": "v0.1.1",
+      "asset": "call-smart-contracts.zip",
+      "sha256": "sha256:affcb17c41aa67d2bfd70fcd0d0a8fc4b28c697d588d14ace44406c443e327da",
+      "download_url": "https://github.com/algorand-devrel/algorand-agent-skills/releases/download/v0.1.1/call-smart-contracts.zip"
+    },
+    "implement-arc-standards": {
+      "repo": "algorand-devrel/algorand-agent-skills",
+      "tag": "v0.1.1",
+      "asset": "implement-arc-standards.zip",
+      "sha256": "sha256:8ec48643d07a1091b1f2733b31995a7943a27f4d20b5b5b540823ab77756f593",
+      "download_url": "https://github.com/algorand-devrel/algorand-agent-skills/releases/download/v0.1.1/implement-arc-standards.zip"
+    },
+    "troubleshoot-errors": {
+      "repo": "algorand-devrel/algorand-agent-skills",
+      "tag": "v0.1.1",
+      "asset": "troubleshoot-errors.zip",
+      "sha256": "sha256:950f74cf721c1215d55580c0a35ccbf8eb4e1996f9a019af92b04d4ea8a49860",
+      "download_url": "https://github.com/algorand-devrel/algorand-agent-skills/releases/download/v0.1.1/troubleshoot-errors.zip"
+    },
+    "use-algokit-cli": {
+      "repo": "algorand-devrel/algorand-agent-skills",
+      "tag": "v0.1.1",
+      "asset": "use-algokit-cli.zip",
+      "sha256": "sha256:f88dd0652f80a40a347f5cc52338ffa6f6baa71b08228b2f3a922a7819cc72b0",
+      "download_url": "https://github.com/algorand-devrel/algorand-agent-skills/releases/download/v0.1.1/use-algokit-cli.zip"
+    },
+    "use-algokit-utils": {
+      "repo": "algorand-devrel/algorand-agent-skills",
+      "tag": "v0.1.1",
+      "asset": "use-algokit-utils.zip",
+      "sha256": "sha256:7b663cf64d4bb90c3ffdd7d00537991ebe393192f7cbbcc78cfbc4f7945c5c27",
+      "download_url": "https://github.com/algorand-devrel/algorand-agent-skills/releases/download/v0.1.1/use-algokit-utils.zip"
+    },
+    "algorand-ecosystem": {
+      "repo": "NautilusOSS/algorand-agent-skills",
+      "commit": "6748d92e2e6c80284313efc173b13cd01e88c043",
+      "path": "skills/algorand-ecosystem"
+    }
+  }
+}

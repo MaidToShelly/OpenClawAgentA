@@ -12,6 +12,10 @@ node_modules/
 secrets/
 address-book/address-book.json
 address-book/watchlist.json
+skills-packages/
+vendor/algorand-skills/*
+!vendor/algorand-skills/LOCKFILE.json
+!vendor/algorand-skills/README.md
 
 # Python caches
 __pycache__/
