@@ -12,6 +12,7 @@ node_modules/
 secrets/
 address-book/address-book.json
 address-book/watchlist.json
+address-book/watchlist-state.json
 skills-packages/
 vendor/algorand-skills/*
 !vendor/algorand-skills/LOCKFILE.json
