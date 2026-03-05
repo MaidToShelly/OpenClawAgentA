@@ -1,0 +1,22 @@
+{
+  "Trader": {
+    "actions": ["swap", "open_position", "close_position"],
+    "tasks_path": "roles/trader/tasks"
+  },
+  "LiquidityProvider": {
+    "actions": [],
+    "tasks_path": "roles/liquidity-provider/tasks"
+  },
+  "Lender": {
+    "actions": [],
+    "tasks_path": "roles/lender/tasks"
+  },
+  "Borrower": {
+    "actions": [],
+    "tasks_path": "roles/borrower/tasks"
+  },
+  "Liquidator": {
+    "actions": [],
+    "tasks_path": "roles/liquidator/tasks"
+  }
+}

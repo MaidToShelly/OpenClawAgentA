@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@tinymanorg/tinyman-js-sdk": "^5.1.4",
     "algosdk": "^3.5.2"
   }
 }
