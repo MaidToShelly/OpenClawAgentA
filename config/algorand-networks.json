@@ -1,0 +1,87 @@
+{
+  "algorand-mainnet": {
+    "chain": "algorand",
+    "description": "Algorand mainnet (production)",
+    "wallet_namespace": "algorand-mainnet",
+    "aliases": ["mainnet", "algo-mainnet", "algorand-mainnet"],
+    "algod": {
+      "url": "https://mainnet-api.4160.nodely.dev",
+      "token": "",
+      "headers": {}
+    },
+    "indexer": {
+      "url": "https://mainnet-idx.4160.nodely.dev",
+      "token": "",
+      "headers": {}
+    },
+    "explorer": "https://allo.info"
+  },
+  "algorand-testnet": {
+    "chain": "algorand",
+    "description": "Algorand testnet",
+    "wallet_namespace": "algorand-testnet",
+    "aliases": ["testnet", "algo-testnet", "algorand-testnet"],
+    "algod": {
+      "url": "https://testnet-api.4160.nodely.dev",
+      "token": "",
+      "headers": {}
+    },
+    "indexer": {
+      "url": "https://testnet-idx.4160.nodely.dev",
+      "token": "",
+      "headers": {}
+    },
+    "explorer": "https://testnet.allo.info"
+  },
+  "algorand-betanet": {
+    "chain": "algorand",
+    "description": "Algorand betanet",
+    "wallet_namespace": "algorand-betanet",
+    "aliases": ["betanet", "algo-betanet", "algorand-betanet"],
+    "algod": {
+      "url": "https://betanet-api.4160.nodely.dev",
+      "token": "",
+      "headers": {}
+    },
+    "indexer": {
+      "url": "https://betanet-idx.4160.nodely.dev",
+      "token": "",
+      "headers": {}
+    },
+    "explorer": "https://betanet.allo.info"
+  },
+  "algorand-futurenet": {
+    "chain": "algorand",
+    "description": "Algorand futurenet (FNet)",
+    "wallet_namespace": "algorand-futurenet",
+    "aliases": ["fnet", "futurenet"],
+    "algod": {
+      "url": "https://fnet-api.4160.nodely.dev",
+      "token": "",
+      "headers": {}
+    },
+    "indexer": {
+      "url": "https://fnet-idx.4160.nodely.dev",
+      "token": "",
+      "headers": {}
+    },
+    "explorer": "https://fnet.algorand.green"
+  },
+  "voi-mainnet": {
+    "chain": "voi",
+    "description": "Voi mainnet (Algorand fork)",
+    "wallet_namespace": "voi-mainnet",
+    "aliases": ["voi-mainnet", "voi"],
+    "algod": {
+      "url": "https://mainnet-api.voi.nodely.dev",
+      "token": "",
+      "headers": {}
+    },
+    "indexer": {
+      "url": "https://mainnet-idx.voi.nodely.dev",
+      "token": "",
+      "headers": {}
+    },
+    "explorer": "https://block.voi.network"
+  }
+}

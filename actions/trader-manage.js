@@ -11,7 +11,9 @@ const TASKS_DIR = path.join(ROOT, 'roles', 'trader', 'tasks');
 const STATE_DIR = path.join(ROOT, 'portfolio');
 const VIRTUAL_WALLET_DIR = path.join(STATE_DIR, 'virtual-wallets');
 const DEFAULT_STATE_PATH = path.join(STATE_DIR, 'trader-state.json');
+const ALGORAND_NETWORKS_PATH = path.join(ROOT, 'config', 'algorand-networks.json');
 const PAUSE_FLAG_PATH = path.join(ROOT, '.trader-paused');
+const NETWORK_DEFAULTS = loadAlgorandNetworkDefaults();
 const TRADES_PATH = path.join(ROOT, 'portfolio', 'trades.json');
 const SECRETS_PATH = path.join(ROOT, 'secrets', 'algorand-account.json');
 const ALGOD_URL = 'https://mainnet-api.algonode.cloud';
@@ -53,7 +55,7 @@ async function main() {
 
   const assetIn = normalizeAsset(task.pair.asset_in);
   const assetOut = normalizeAsset(task.pair.asset_out);
-  const walletNetwork = task.virtual_wallet_network || `algorand-${task.network}`;
+  const walletNetwork = resolveWalletNetworkKey(task);
   const walletHandle = task.virtual_wallet_id
     ? loadVirtualWallet(task.virtual_wallet_id, walletNetwork, assetIn, assetOut)
     : null;
@@ -551,6 +553,28 @@ function requireJson(filePath, label) {
   }
   const raw = fs.readFileSync(filePath, 'utf8') || '{}';
   return JSON.parse(raw);
+}
+
+function loadAlgorandNetworkDefaults() {
+  if (!fs.existsSync(ALGORAND_NETWORKS_PATH)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(ALGORAND_NETWORKS_PATH, 'utf8'));
+  } catch (err) {
+    console.warn('Failed to load algorand network defaults:', err.message);
+    return {};
+  }
+}
+
+function resolveWalletNetworkKey(task) {
+  if (task.virtual_wallet_network) return task.virtual_wallet_network;
+  const networkName = (task.network || '').toLowerCase();
+  for (const [key, value] of Object.entries(NETWORK_DEFAULTS)) {
+    const aliases = (value.aliases || []).map((a) => String(a).toLowerCase());
+    if (key.toLowerCase() === networkName || aliases.includes(networkName)) {
+      return value.wallet_namespace || key;
+    }
+  }
+  return `algorand-${task.network || 'unknown'}`;
 }
 
 function normalizeBalances(balances = {}) {
