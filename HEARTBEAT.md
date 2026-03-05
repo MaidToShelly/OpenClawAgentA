@@ -1,5 +1,10 @@
-# HEARTBEAT.md
+# Heartbeat Tasks
 
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+## Algorand watch digests (every heartbeat)
+Run the consolidated watcher (reads `address-book/watchlist.json`, which is git-ignored). Only surface the output if the script prints a digest; otherwise reply `HEARTBEAT_OK`.
 
-# Add tasks below when you want the agent to check something periodically.
+```
+./actions/run-watchlist.js
+```
+
+(Adjust the local watch list in `address-book/watchlist.json` whenever you want to add/remove contacts or change intervals.)

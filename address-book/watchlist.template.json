@@ -1,0 +1,4 @@
+[
+  { "contact": "example-contact-id", "interval": "30m", "network": "mainnet" },
+  { "address": "SOMEALGOWALLETADDRESSHERE", "interval": "1h", "network": "testnet" }
+]
