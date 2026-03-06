@@ -63,6 +63,7 @@ async function main() {
   const walletHandle = task.virtual_wallet_id
     ? loadVirtualWallet(task.virtual_wallet_id, walletNetwork, assetIn, assetOut)
     : null;
+  const preflightWarnings = [];
 
   const pool = await poolUtils.v2.getPoolInfo({
     network: task.network,
@@ -86,13 +87,25 @@ async function main() {
   const accountInfo = await algodClient.accountInformation(account.addr).do();
   const holdings = isPaper
     ? extractPaperHoldings(state)
-    : extractHoldings({ info: accountInfo, assetOutId: assetOut.id });
+    : extractHoldings({ info: accountInfo, assetInId: assetIn.id, assetOutId: assetOut.id });
+  const virtualScoped = Boolean(walletHandle);
+  let ledgerAssetOutMicro = BigInt(state.balances?.asset_out_micro || 0);
+  if (virtualScoped && ledgerAssetOutMicro > holdings.assetOutMicro && !isPaper) {
+    preflightWarnings.push(`[warn] Task ledger for ${taskId} exceeded on-chain balance; clamping from ${ledgerAssetOutMicro.toString()} to ${holdings.assetOutMicro.toString()} micro ${assetOut.symbol}`);
+    ledgerAssetOutMicro = holdings.assetOutMicro;
+    state.balances.asset_out_micro = Number(ledgerAssetOutMicro);
+  }
+  const dustThreshold = isPaper ? PAPER_DUST : POSITION_DUST;
+  const actualHasPosition = holdings.assetOutMicro > dustThreshold;
+  const ledgerHasPosition = ledgerAssetOutMicro > dustThreshold;
   const hasPosition = isPaper
-    ? holdings.assetOutMicro > PAPER_DUST
-    : holdings.assetOutMicro > POSITION_DUST;
+    ? actualHasPosition
+    : virtualScoped
+      ? ledgerHasPosition
+      : actualHasPosition;
 
   if (isPaper) {
-    state.position.open = holdings.assetOutMicro > PAPER_DUST;
+    state.position.open = actualHasPosition;
   }
 
   if (hasPosition && !state.position.open && !isPaper) {
@@ -116,6 +129,7 @@ async function main() {
   const now = new Date();
   const updates = [];
   const actions = [];
+  actions.push(...preflightWarnings);
 
   const exitRule = task.strategy.exit_rule || {};
   const reentryRule = task.strategy.reentry_rule || {};
@@ -131,10 +145,15 @@ async function main() {
 
     if (forceClose || shouldTakeProfit) {
       const dustThreshold = isPaper ? PAPER_DUST : POSITION_DUST;
-      if (holdings.assetOutMicro <= dustThreshold) {
+      let closeMicro = virtualScoped ? ledgerAssetOutMicro : holdings.assetOutMicro;
+      if (!isPaper && closeMicro > holdings.assetOutMicro) {
+        actions.push(`[warn] Virtual ledger exceeds on-chain ${assetOut.symbol}; clamping close size to available balance`);
+        closeMicro = holdings.assetOutMicro;
+      }
+      if (closeMicro <= dustThreshold) {
         actions.push('Skip close: position size under dust threshold');
       } else if (dryRun) {
-        actions.push(`DRY RUN: would close ${holdings.assetOutMicro.toString()} micro ${assetOut.symbol}`);
+        actions.push(`DRY RUN: would close ${closeMicro.toString()} micro ${assetOut.symbol}`);
       } else if (isPaper) {
         await closePaperPosition({
           state,
@@ -156,7 +175,7 @@ async function main() {
         const closeResult = await runSwap({
           taskId,
           direction: 'reverse',
-          amountMicro: holdings.assetOutMicro.toString(),
+          amountMicro: closeMicro.toString(),
           slippageBps: task.strategy.slippage_tolerance_bps,
           dryRun: false
         });
@@ -178,7 +197,7 @@ async function main() {
           amount_out_micro: closeResult.amount_out_micro
         };
         state.balances = normalizeBalances(state.balances);
-        const closeAmount = Number(holdings.assetOutMicro);
+        const closeAmount = Number(closeMicro);
         state.balances.asset_out_micro = Math.max(0, state.balances.asset_out_micro - closeAmount);
         state.balances.algo_realized_micro += Number(closeResult.amount_out_micro);
         updateVirtualWalletBalance(walletHandle, assetOut, -closeAmount);
@@ -189,12 +208,12 @@ async function main() {
     }
   } else {
     const readyToOpen = shouldReenter({ state, reentryRule, markPrice, now, forceOpen });
-    const minTrade = BigInt(task.strategy.min_trade_amount_micro_algo);
+    const minTrade = resolveMinTradeAmount(task.strategy, assetIn);
     if (readyToOpen) {
-      if (!isPaper && holdings.algoSpendable <= minTrade) {
-        actions.push('Skip open: insufficient spendable ALGO');
+      if (!isPaper && holdings.assetInMicro <= minTrade) {
+        actions.push(`Skip open: insufficient spendable ${assetIn.symbol}`);
       } else if (dryRun) {
-        actions.push(`DRY RUN: would open position with ${minTrade} micro ALGO`);
+        actions.push(`DRY RUN: would open position with ${minTrade} micro ${assetIn.symbol}`);
       } else if (isPaper) {
         await openPaperPosition({
           state,
@@ -426,6 +445,26 @@ async function getSwapQuote({ direction, pool, task, amountMicro, slippageBps })
   return { quoteSummary: summarizeQuote(quote), assetIn, assetOut };
 }
 
+
+
+function resolveMinTradeAmount(strategy = {}, assetIn = {}) {
+  const symbol = (assetIn.symbol || '').toLowerCase();
+  const candidates = [];
+  if (symbol) {
+    candidates.push(`min_trade_amount_micro_${symbol}`);
+  }
+  candidates.push('min_trade_amount_micro_asset_in');
+  candidates.push('min_trade_amount_micro_algo');
+  for (const key of candidates) {
+    if (key && Object.prototype.hasOwnProperty.call(strategy, key)) {
+      const value = strategy[key];
+      if (value === undefined || value === null) continue;
+      return BigInt(value);
+    }
+  }
+  throw new Error('min trade amount not configured for asset_in ' + (assetIn.symbol || assetIn.id || 'unknown'));
+}
+
 function loadTask(taskId) {
   const taskPath = path.join(TASKS_DIR, `${taskId}.json`);
   if (!fs.existsSync(taskPath)) {
@@ -486,25 +525,36 @@ function saveState(statePath, state) {
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 }
 
-function extractHoldings({ info, assetOutId }) {
+function extractHoldings({ info, assetInId, assetOutId }) {
   const algoTotal = BigInt(info.amount);
   const minBalance = BigInt(info['min-balance'] || 0);
-  const spendable = algoTotal > minBalance ? algoTotal - minBalance : 0n;
-  const assetOutMicro = BigInt(
-    ((info.assets || []).find((a) => Number((a['asset-id'] ?? a['assetId'])) === Number(assetOutId))?.amount) || 0
-  );
+  const algoSpendable = algoTotal > minBalance ? algoTotal - minBalance : 0n;
+  const findAssetAmount = (assetId) => {
+    if (assetId === undefined || assetId === null) return 0n;
+    if (Number(assetId) === 0) {
+      return algoSpendable;
+    }
+    return BigInt(
+      ((info.assets || []).find((a) => Number((a['asset-id'] ?? a['assetId'])) === Number(assetId))?.amount) || 0
+    );
+  };
+  const assetOutMicro = findAssetAmount(assetOutId);
+  const assetInMicro = findAssetAmount(assetInId);
   return {
     algoTotal,
-    algoSpendable: spendable,
+    algoSpendable,
+    assetInMicro,
     assetOutMicro
   };
 }
 
 function extractPaperHoldings(state) {
   const balances = normalizeBalances(state.balances);
+  const netAlgo = BigInt(balances.algo_realized_micro - balances.algo_spent_micro);
   return {
-    algoTotal: BigInt(balances.algo_realized_micro - balances.algo_spent_micro),
+    algoTotal: netAlgo,
     algoSpendable: 0n,
+    assetInMicro: netAlgo,
     assetOutMicro: BigInt(balances.asset_out_micro)
   };
 }
@@ -657,9 +707,12 @@ function syncVirtualWallet(walletHandle, assetIn, assetOut, balances) {
   };
   const keyIn = ensureEntry(assetIn);
   const keyOut = ensureEntry(assetOut);
-  const algoInitial = Number(network.initial_assets[keyIn] || 0);
-  const algoDeployed = balances.algo_spent_micro - balances.algo_realized_micro;
-  network.assets[keyIn].amount_micro = Math.max(0, algoInitial - algoDeployed);
+  const lockAssetIn = Boolean(walletHandle.wallet && walletHandle.wallet.lock_asset_in);
+  if (!lockAssetIn) {
+    const assetInInitial = Number(network.initial_assets[keyIn] || 0);
+    const netDeployed = balances.algo_spent_micro - balances.algo_realized_micro;
+    network.assets[keyIn].amount_micro = Math.max(0, assetInInitial - netDeployed);
+  }
   const outInitial = Number(network.initial_assets[keyOut] || 0);
   network.assets[keyOut].amount_micro = Math.max(0, outInitial + balances.asset_out_micro);
   fs.writeFileSync(walletHandle.path, JSON.stringify(walletHandle.wallet, null, 2));
