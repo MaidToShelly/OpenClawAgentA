@@ -34,6 +34,19 @@ function requireJson(filePath, label) {
   return JSON.parse(raw);
 }
 
+function classifyAction(actions) {
+  const joined = actions.join(' ');
+  if (/Opened position|paper.*Opened/i.test(joined)) return 'open';
+  if (/Closed position|paper.*Closed/i.test(joined)) return 'close';
+  if (/DRY RUN.*close/i.test(joined)) return 'dry_close';
+  if (/DRY RUN.*open/i.test(joined)) return 'dry_open';
+  if (/Skip close/i.test(joined)) return 'skip_close';
+  if (/Skip open|insufficient/i.test(joined)) return 'skip_open';
+  if (/Holding position/i.test(joined)) return 'hold';
+  if (/No re-entry/i.test(joined)) return 'wait';
+  return 'unknown';
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   const taskId = args.task || DEFAULT_TASK_ID;
@@ -41,14 +54,17 @@ async function main() {
   const forceOpen = Boolean(args['force-open']);
   const forceClose = Boolean(args['force-close']);
   const verbose = Boolean(args.verbose);
+  const jsonMode = Boolean(args.json);
+  const quietMode = Boolean(args.quiet);
   const ignorePause = Boolean(args['ignore-pause']);
 
   if (fs.existsSync(PAUSE_FLAG_PATH) && !ignorePause) {
-    const msg = `[paused] ${PAUSE_FLAG_PATH} exists — skipping trader run.`;
-    if (verbose || dryRun) {
-      console.log(msg);
-    } else {
-      console.log('Trader manager paused (remove .trader-paused to resume).');
+    if (jsonMode) {
+      console.log(JSON.stringify({ task: taskId, action: 'paused' }));
+    } else if (!quietMode) {
+      console.log(verbose || dryRun
+        ? `[paused] ${PAUSE_FLAG_PATH} exists — skipping trader run.`
+        : 'Trader manager paused (remove .trader-paused to resume).');
     }
     return;
   }
@@ -246,10 +262,30 @@ async function main() {
   state.last_mark_price = markPrice;
   saveState(statePath, state);
 
+  const ledger = normalizeBalances(state.balances);
+  const actionType = classifyAction(actions);
+  const isIdle = actionType === 'hold' || actionType === 'wait';
+
+  if (jsonMode) {
+    const result = {
+      task: taskId,
+      mode: executionMode,
+      action: actionType,
+      position_open: state.position.open,
+      mark_price: markPrice,
+      balances: ledger,
+    };
+    if (preflightWarnings.length) result.warnings = preflightWarnings;
+    if (!isIdle) result.details = actions.filter((a) => !a.startsWith('[warn]'));
+    console.log(JSON.stringify(result));
+    return;
+  }
+
+  if (quietMode && isIdle && !preflightWarnings.length) return;
+
   const summaryLines = [
     `Trader manager (${executionMode}) @ ${now.toISOString()}`
   ];
-  const ledger = normalizeBalances(state.balances);
   if (isPaper) {
     const virtualAlgo = ledger.algo_realized_micro - ledger.algo_spent_micro;
     summaryLines.push(
