@@ -7,15 +7,11 @@ const { parseArgs } = require('../lib/parse-args');
 
 const ROOT = path.join(__dirname, '..');
 const WATCHLIST_PATH = path.join(ROOT, 'address-book', 'watchlist.json');
-const TEMPLATE_PATH = path.join(ROOT, 'address-book', 'watchlist.template.json');
 const STATE_PATH = path.join(ROOT, 'address-book', 'watchlist-state.json');
 
 function loadWatchlist() {
-  const source = fs.existsSync(WATCHLIST_PATH) ? WATCHLIST_PATH : (fs.existsSync(TEMPLATE_PATH) ? TEMPLATE_PATH : null);
-  if (!source) {
-    return [];
-  }
-  const data = fs.readFileSync(source, 'utf8');
+  if (!fs.existsSync(WATCHLIST_PATH)) return [];
+  const data = fs.readFileSync(WATCHLIST_PATH, 'utf8');
   if (!data.trim()) return [];
   return JSON.parse(data);
 }
@@ -57,10 +53,7 @@ async function main() {
   const target = args.contact || args.address || null;
   const force = Boolean(args.force);
   const watchlist = loadWatchlist();
-  if (!watchlist.length) {
-    console.error('Watchlist is empty. Populate address-book/watchlist.json');
-    process.exit(1);
-  }
+  if (!watchlist.length) return;
 
   const state = loadState();
   const now = Date.now();
