@@ -2,48 +2,16 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { watchAddress, INTERVALS } = require('./watch-address');
+const { parseArgs } = require('../lib/parse-args');
 
 const ROOT = path.join(__dirname, '..');
 const WATCHLIST_PATH = path.join(ROOT, 'address-book', 'watchlist.json');
-const TEMPLATE_PATH = path.join(ROOT, 'address-book', 'watchlist.template.json');
 const STATE_PATH = path.join(ROOT, 'address-book', 'watchlist-state.json');
-const WATCH_SCRIPT = path.join(__dirname, 'watch-address.js');
-const INTERVALS = {
-  '1m': 60,
-  '5m': 5 * 60,
-  '30m': 30 * 60,
-  '1h': 60 * 60,
-  '1d': 24 * 60 * 60,
-  '30d': 30 * 24 * 60 * 60,
-};
-
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 2; i < argv.length; i++) {
-    const token = argv[i];
-    if (token.startsWith('--')) {
-      const eq = token.indexOf('=');
-      if (eq !== -1) {
-        const key = token.slice(2, eq);
-        const val = token.slice(eq + 1);
-        args[key] = val;
-      } else {
-        const key = token.slice(2);
-        const val = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
-        args[key] = val;
-      }
-    }
-  }
-  return args;
-}
 
 function loadWatchlist() {
-  const source = fs.existsSync(WATCHLIST_PATH) ? WATCHLIST_PATH : (fs.existsSync(TEMPLATE_PATH) ? TEMPLATE_PATH : null);
-  if (!source) {
-    return [];
-  }
-  const data = fs.readFileSync(source, 'utf8');
+  if (!fs.existsSync(WATCHLIST_PATH)) return [];
+  const data = fs.readFileSync(WATCHLIST_PATH, 'utf8');
   if (!data.trim()) return [];
   return JSON.parse(data);
 }
@@ -60,25 +28,6 @@ function loadState() {
 
 function saveState(state) {
   fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
-}
-
-function buildArgs(entry) {
-  const args = [];
-  if (entry.contact) {
-    args.push('--contact', entry.contact);
-  } else if (entry.address) {
-    args.push('--address', entry.address);
-  } else {
-    return null;
-  }
-  if (entry.interval) {
-    args.push('--interval', entry.interval);
-  }
-  if (entry.network) {
-    args.push('--network', entry.network);
-  }
-  args.push('--quiet');
-  return args;
 }
 
 function shouldThrottle(entry, state, now, force) {
@@ -99,44 +48,58 @@ function updateState(entry, state, now) {
   state[key] = { lastReport: new Date(now).toISOString() };
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv);
   const target = args.contact || args.address || null;
   const force = Boolean(args.force);
   const watchlist = loadWatchlist();
-  if (!watchlist.length) {
-    console.error('Watchlist is empty. Populate address-book/watchlist.json');
-    process.exit(1);
-  }
+  if (!watchlist.length) return;
 
   const state = loadState();
   const now = Date.now();
+
+  const eligible = watchlist.filter((entry) => {
+    const key = entry.contact || entry.address;
+    if (!key) return false;
+    if (target && key !== target) return false;
+    if (shouldThrottle(entry, state, now, force)) return false;
+    return true;
+  });
+
+  const results = await Promise.all(
+    eligible.map(async (entry) => {
+      try {
+        const digest = await watchAddress({
+          contact: entry.contact,
+          address: entry.address,
+          interval: entry.interval,
+          network: entry.network,
+          quiet: true,
+        });
+        return { entry, digest, error: null };
+      } catch (err) {
+        return { entry, digest: null, error: err };
+      }
+    })
+  );
+
   let stateDirty = false;
   const digests = [];
 
-  watchlist.forEach((entry) => {
-    const key = entry.contact || entry.address;
-    if (target && key !== target) return;
-    if (shouldThrottle(entry, state, now, force)) return;
-
-    const argv = buildArgs(entry);
-    if (!argv) return;
-    const result = spawnSync(process.execPath, [WATCH_SCRIPT, ...argv], { encoding: 'utf8' });
-    if (result.error) {
-      throw result.error;
+  for (const { entry, digest, error } of results) {
+    if (error) {
+      console.error(`[${entry.contact || entry.address}] ${error.message || error}`);
+      continue;
     }
-    if (result.stdout && result.stdout.trim()) {
-      digests.push(result.stdout.trim());
+    if (digest) {
+      digests.push(digest);
       updateState(entry, state, now);
       stateDirty = true;
-    } else if (!result.stdout && force) {
+    } else if (force) {
       updateState(entry, state, now);
       stateDirty = true;
     }
-    if (result.stderr && result.stderr.trim()) {
-      console.error(result.stderr.trim());
-    }
-  });
+  }
 
   if (stateDirty) {
     saveState(state);
@@ -147,9 +110,7 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err) => {
   console.error(err.message || err);
   process.exit(1);
-}
+});
