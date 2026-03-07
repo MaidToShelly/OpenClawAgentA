@@ -4,20 +4,59 @@ const fs = require('fs');
 const path = require('path');
 const algosdk = require('algosdk');
 const { poolUtils, Swap, SwapType } = require('@tinymanorg/tinyman-js-sdk');
-const { runSwap, summarizeQuote, appendTradeLog } = require('./trader-swap');
+const { runSwap, summarizeQuote } = require('./trader-swap');
 const { resolveWalletNamespace, resolveAlgodSettings } = require('../lib/algorand-network');
+const {
+  normalizeBalances, resolveStatePath, loadState, saveState,
+  extractHoldings, extractPaperHoldings, bootstrapEntry,
+  loadTask, normalizeAsset,
+  POSITION_DUST, PAPER_DUST, DEFAULT_TASK_ID,
+} = require('../lib/trader-state');
+const {
+  loadVirtualWallet, syncVirtualWallet,
+  updateVirtualWalletBalance, formatWalletSummary,
+} = require('../lib/virtual-wallet');
+const {
+  shouldReenter, resolveMinTradeAmount,
+  openPaperPosition, closePaperPosition,
+} = require('../lib/trader-strategy');
 
 const ROOT = path.join(__dirname, '..');
-const TASKS_DIR = path.join(ROOT, 'roles', 'trader', 'tasks');
-const STATE_DIR = path.join(ROOT, 'portfolio');
-const VIRTUAL_WALLET_DIR = path.join(STATE_DIR, 'virtual-wallets');
-const DEFAULT_STATE_PATH = path.join(STATE_DIR, 'trader-state.json');
 const PAUSE_FLAG_PATH = path.join(ROOT, '.trader-paused');
-const TRADES_PATH = path.join(ROOT, 'portfolio', 'trades.json');
 const SECRETS_PATH = path.join(ROOT, 'secrets', 'algorand-account.json');
-const DEFAULT_TASK_ID = 'tinyman-algo-wad';
-const POSITION_DUST = 1_000n; // 0.001 units (micro)
-const PAPER_DUST = 1_000n;
+
+function requireJson(filePath, label) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`${label} missing at ${filePath}`);
+  }
+  const raw = fs.readFileSync(filePath, 'utf8') || '{}';
+  return JSON.parse(raw);
+}
+
+function parseArgs(argv) {
+  const args = {};
+  for (let i = 2; i < argv.length; i++) {
+    const token = argv[i];
+    if (token.startsWith('--')) {
+      const eq = token.indexOf('=');
+      if (eq !== -1) {
+        const key = token.slice(2, eq);
+        const value = token.slice(eq + 1);
+        args[key] = value;
+      } else {
+        const key = token.slice(2);
+        const next = argv[i + 1];
+        if (!next || next.startsWith('--')) {
+          args[key] = true;
+        } else {
+          args[key] = next;
+          i += 1;
+        }
+      }
+    }
+  }
+  return args;
+}
 
 async function main() {
   const args = parseArgs(process.argv);
@@ -144,7 +183,6 @@ async function main() {
     const shouldTakeProfit = typeof profitTarget === 'number' && profitPct !== null && profitPct >= profitTarget;
 
     if (forceClose || shouldTakeProfit) {
-      const dustThreshold = isPaper ? PAPER_DUST : POSITION_DUST;
       let closeMicro = virtualScoped ? ledgerAssetOutMicro : holdings.assetOutMicro;
       if (!isPaper && closeMicro > holdings.assetOutMicro) {
         actions.push(`[warn] Virtual ledger exceeds on-chain ${assetOut.symbol}; clamping close size to available balance`);
@@ -156,41 +194,23 @@ async function main() {
         actions.push(`DRY RUN: would close ${closeMicro.toString()} micro ${assetOut.symbol}`);
       } else if (isPaper) {
         await closePaperPosition({
-          state,
-          statePath,
-          task,
-          taskId,
-          markPrice,
-          holdings,
-          now,
-          executionMode,
-          pool,
-          algodClient,
-          assetIn,
-          assetOut,
-          actions,
-          walletHandle
+          state, statePath, task, taskId, markPrice, holdings, now,
+          executionMode, pool, algodClient, assetIn, assetOut, actions, walletHandle
         });
       } else {
         const closeResult = await runSwap({
-          taskId,
-          direction: 'reverse',
+          taskId, direction: 'reverse',
           amountMicro: closeMicro.toString(),
           slippageBps: task.strategy.slippage_tolerance_bps,
           dryRun: false
         });
         actions.push(`Closed position via tx ${closeResult.txid}`);
         state.position = {
-          open: false,
-          entry_price: null,
-          entry_timestamp: null,
-          entry_amount_in_micro: null,
-          entry_amount_out_micro: null,
-          entry_txid: null
+          open: false, entry_price: null, entry_timestamp: null,
+          entry_amount_in_micro: null, entry_amount_out_micro: null, entry_txid: null
         };
         state.last_exit = {
-          timestamp: now.toISOString(),
-          price: markPrice,
+          timestamp: now.toISOString(), price: markPrice,
           reason: forceClose ? 'manual' : 'take_profit',
           txid: closeResult.txid,
           amount_in_micro: closeResult.amount_in_micro,
@@ -216,24 +236,12 @@ async function main() {
         actions.push(`DRY RUN: would open position with ${minTrade} micro ${assetIn.symbol}`);
       } else if (isPaper) {
         await openPaperPosition({
-          state,
-          statePath,
-          task,
-          taskId,
-          now,
-          executionMode,
-          pool,
-          algodClient,
-          assetIn,
-          assetOut,
-          amountMicro: minTrade,
-          actions,
-          walletHandle
+          state, statePath, task, taskId, now, executionMode,
+          pool, algodClient, assetIn, assetOut, amountMicro: minTrade, actions, walletHandle
         });
       } else {
         const openResult = await runSwap({
-          taskId,
-          direction: 'forward',
+          taskId, direction: 'forward',
           amountMicro: minTrade.toString(),
           slippageBps: task.strategy.slippage_tolerance_bps,
           dryRun: false
@@ -241,8 +249,7 @@ async function main() {
         actions.push(`Opened position via tx ${openResult.txid}`);
         const entryPrice = Number(openResult.amount_out_micro) / Number(openResult.amount_in_micro);
         state.position = {
-          open: true,
-          entry_price: entryPrice,
+          open: true, entry_price: entryPrice,
           entry_timestamp: now.toISOString(),
           entry_amount_in_micro: openResult.amount_in_micro,
           entry_amount_out_micro: openResult.amount_out_micro,
@@ -301,455 +308,6 @@ async function main() {
   } else {
     console.log(actions.join('\n'));
   }
-}
-
-async function openPaperPosition({
-  state,
-  statePath,
-  task,
-  taskId,
-  now,
-  executionMode,
-  pool,
-  algodClient,
-  assetIn,
-  assetOut,
-  amountMicro,
-  actions,
-  walletHandle
-}) {
-  state.balances = normalizeBalances(state.balances);
-  const slippage = task.strategy.slippage_tolerance_bps;
-  const quote = await getSwapQuote({
-    direction: 'forward',
-    pool,
-    task,
-    amountMicro,
-    slippageBps: slippage
-  });
-  const assetOutMicro = Number(quote.quoteSummary.assetOutAmount);
-  const algoMicro = Number(amountMicro);
-  state.balances.asset_out_micro += assetOutMicro;
-  state.balances.algo_spent_micro += algoMicro;
-  updateVirtualWalletBalance(walletHandle, assetIn, -algoMicro);
-  updateVirtualWalletBalance(walletHandle, assetOut, assetOutMicro);
-  state.position = {
-    open: true,
-    entry_price: Number(quote.quoteSummary.assetOutAmount) / Number(amountMicro),
-    entry_timestamp: now.toISOString(),
-    entry_amount_in_micro: amountMicro.toString(),
-    entry_amount_out_micro: quote.quoteSummary.assetOutAmount.toString(),
-    entry_txid: `[paper-open-${Date.now()}]`
-  };
-  await appendTradeLog({
-    task,
-    quoteSummary: quote.quoteSummary,
-    amountMicro,
-    assetIn,
-    assetOut,
-    options: {
-      paper: true,
-      executionMode,
-      txidOverride: state.position.entry_txid,
-      timestamp: now.toISOString()
-    }
-  });
-  saveState(statePath, state);
-  actions.push('[paper] Opened virtual position');
-}
-
-async function closePaperPosition({
-  state,
-  statePath,
-  task,
-  taskId,
-  markPrice,
-  holdings,
-  now,
-  executionMode,
-  pool,
-  algodClient,
-  assetIn,
-  assetOut,
-  actions,
-  walletHandle
-}) {
-  state.balances = normalizeBalances(state.balances);
-  const amountMicro = holdings.assetOutMicro;
-  if (amountMicro <= PAPER_DUST) {
-    actions.push('[paper] Skip close: simulated position too small');
-    return;
-  }
-  const quote = await getSwapQuote({
-    direction: 'reverse',
-    pool,
-    task,
-    amountMicro,
-    slippageBps: task.strategy.slippage_tolerance_bps
-  });
-  const sellMicro = Number(amountMicro);
-  const algoOutMicro = Number(quote.quoteSummary.assetOutAmount);
-  state.balances.asset_out_micro = Math.max(0, state.balances.asset_out_micro - sellMicro);
-  state.balances.algo_realized_micro += algoOutMicro;
-  updateVirtualWalletBalance(walletHandle, assetOut, -sellMicro);
-  updateVirtualWalletBalance(walletHandle, assetIn, algoOutMicro);
-  state.position = {
-    open: false,
-    entry_price: null,
-    entry_timestamp: null,
-    entry_amount_in_micro: null,
-    entry_amount_out_micro: null,
-    entry_txid: null
-  };
-  state.last_exit = {
-    timestamp: now.toISOString(),
-    price: markPrice,
-    reason: 'paper_take_profit',
-    txid: `[paper-close-${Date.now()}]`,
-    amount_in_micro: amountMicro.toString(),
-    amount_out_micro: quote.quoteSummary.assetOutAmount.toString()
-  };
-  await appendTradeLog({
-    task,
-    quoteSummary: quote.quoteSummary,
-    amountMicro,
-    assetIn: assetOut,
-    assetOut: assetIn,
-    options: {
-      paper: true,
-      executionMode,
-      txidOverride: state.last_exit.txid,
-      timestamp: now.toISOString()
-    }
-  });
-  saveState(statePath, state);
-  actions.push('[paper] Closed virtual position');
-}
-
-async function getSwapQuote({ direction, pool, task, amountMicro, slippageBps }) {
-  const normalizedDirection = direction === 'reverse' ? 'reverse' : 'forward';
-  const assetInDef = normalizedDirection === 'forward' ? task.pair.asset_in : task.pair.asset_out;
-  const assetOutDef = normalizedDirection === 'forward' ? task.pair.asset_out : task.pair.asset_in;
-  const assetIn = normalizeAsset(assetInDef);
-  const assetOut = normalizeAsset(assetOutDef);
-  const slippage = (typeof slippageBps === 'number' ? slippageBps : (task.strategy.slippage_tolerance_bps || 100)) / 10_000;
-  const quote = await Swap.v2.getQuote({
-    type: SwapType.FixedInput,
-    pool,
-    amount: BigInt(amountMicro),
-    assetIn,
-    assetOut,
-    network: task.network,
-    slippage
-  });
-  return { quoteSummary: summarizeQuote(quote), assetIn, assetOut };
-}
-
-
-
-function resolveMinTradeAmount(strategy = {}, assetIn = {}) {
-  const symbol = (assetIn.symbol || '').toLowerCase();
-  const candidates = [];
-  if (symbol) {
-    candidates.push(`min_trade_amount_micro_${symbol}`);
-  }
-  candidates.push('min_trade_amount_micro_asset_in');
-  candidates.push('min_trade_amount_micro_algo');
-  for (const key of candidates) {
-    if (key && Object.prototype.hasOwnProperty.call(strategy, key)) {
-      const value = strategy[key];
-      if (value === undefined || value === null) continue;
-      return BigInt(value);
-    }
-  }
-  throw new Error('min trade amount not configured for asset_in ' + (assetIn.symbol || assetIn.id || 'unknown'));
-}
-
-function loadTask(taskId) {
-  const taskPath = path.join(TASKS_DIR, `${taskId}.json`);
-  if (!fs.existsSync(taskPath)) {
-    throw new Error(`Task config not found at ${taskPath}`);
-  }
-  return JSON.parse(fs.readFileSync(taskPath, 'utf8'));
-}
-
-function resolveStatePath(taskId, executionMode) {
-  if (taskId === DEFAULT_TASK_ID && executionMode === 'live') {
-    return DEFAULT_STATE_PATH;
-  }
-  const safeMode = executionMode.replace(/[^a-z0-9_-]/gi, '') || 'mode';
-  return path.join(STATE_DIR, `${taskId}-${safeMode}-state.json`);
-}
-
-function loadState(statePath, taskId, executionMode) {
-  if (!fs.existsSync(statePath)) {
-    return {
-      task_id: taskId,
-      execution_mode: executionMode,
-      position: { open: false },
-      last_exit: null,
-      last_check: null,
-      last_mark_price: null,
-      balances: normalizeBalances(),
-      balances_bootstrapped: false
-    };
-  }
-  const data = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-  data.task_id = data.task_id || taskId;
-  data.execution_mode = executionMode;
-  data.position = data.position || { open: false };
-  if (data.paper && !data.balances) {
-    data.balances = {
-      asset_out_micro: data.paper.asset_out_micro || 0,
-      algo_spent_micro: data.paper.algo_spent_micro || 0,
-      algo_realized_micro: data.paper.algo_realized_micro || 0
-    };
-    delete data.paper;
-  }
-  data.balances = normalizeBalances(data.balances);
-  if (!data.balances_bootstrapped) {
-    const rebuilt = rebuildBalancesFromTrades(taskId, executionMode);
-    if (
-      rebuilt.asset_out_micro !== 0 ||
-      rebuilt.algo_spent_micro !== 0 ||
-      rebuilt.algo_realized_micro !== 0
-    ) {
-      data.balances = rebuilt;
-      data.balances_bootstrapped = true;
-    }
-  }
-  return data;
-}
-
-function saveState(statePath, state) {
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
-}
-
-function extractHoldings({ info, assetInId, assetOutId }) {
-  const algoTotal = BigInt(info.amount);
-  const minBalance = BigInt(info['min-balance'] || 0);
-  const algoSpendable = algoTotal > minBalance ? algoTotal - minBalance : 0n;
-  const findAssetAmount = (assetId) => {
-    if (assetId === undefined || assetId === null) return 0n;
-    if (Number(assetId) === 0) {
-      return algoSpendable;
-    }
-    return BigInt(
-      ((info.assets || []).find((a) => Number((a['asset-id'] ?? a['assetId'])) === Number(assetId))?.amount) || 0
-    );
-  };
-  const assetOutMicro = findAssetAmount(assetOutId);
-  const assetInMicro = findAssetAmount(assetInId);
-  return {
-    algoTotal,
-    algoSpendable,
-    assetInMicro,
-    assetOutMicro
-  };
-}
-
-function extractPaperHoldings(state) {
-  const balances = normalizeBalances(state.balances);
-  const netAlgo = BigInt(balances.algo_realized_micro - balances.algo_spent_micro);
-  return {
-    algoTotal: netAlgo,
-    algoSpendable: 0n,
-    assetInMicro: netAlgo,
-    assetOutMicro: BigInt(balances.asset_out_micro)
-  };
-}
-
-function bootstrapEntry(taskId, direction) {
-  if (!fs.existsSync(TRADES_PATH)) return null;
-  const trades = JSON.parse(fs.readFileSync(TRADES_PATH, 'utf8'))?.trades || [];
-  const last = [...trades].reverse().find((t) => t.task_id === taskId && t.direction === direction && !t.paper);
-  if (!last) return null;
-  const price = Number(last.output.amount_micro) / Number(last.input.amount_micro);
-  return {
-    entry_price: price,
-    entry_timestamp: last.timestamp,
-    entry_amount_in_micro: last.input.amount_micro,
-    entry_amount_out_micro: last.output.amount_micro,
-    entry_txid: last.txid
-  };
-}
-
-function shouldReenter({ state, reentryRule, markPrice, now, forceOpen }) {
-  if (forceOpen) return true;
-  if (!state.last_exit) return true;
-  const exitTime = state.last_exit.timestamp ? new Date(state.last_exit.timestamp) : null;
-  const sinceExitMinutes = exitTime ? (now - exitTime) / (1000 * 60) : null;
-  const graceMinutes = reentryRule.grace_period_minutes || 60;
-  const forcedHours = reentryRule.forced_reopen_after_hours || 24;
-  const minDrawdown = reentryRule.min_drawdown_percent || 0;
-  if (sinceExitMinutes !== null && sinceExitMinutes >= forcedHours * 60) {
-    return true;
-  }
-  if (sinceExitMinutes === null || sinceExitMinutes < graceMinutes) {
-    return false;
-  }
-  if (!state.last_exit.price) return false;
-  const drawdownPct = ((state.last_exit.price - markPrice) / state.last_exit.price) * 100;
-  return drawdownPct >= minDrawdown;
-}
-
-function normalizeAsset(def) {
-  return {
-    id: Number(def.id),
-    symbol: def.symbol || String(def.id),
-    decimals: typeof def.decimals === 'number' ? def.decimals : 6
-  };
-}
-
-function requireJson(filePath, label) {
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`${label} missing at ${filePath}`);
-  }
-  const raw = fs.readFileSync(filePath, 'utf8') || '{}';
-  return JSON.parse(raw);
-}
-
-function normalizeBalances(balances = {}) {
-  return {
-    asset_out_micro: Number(balances.asset_out_micro || 0),
-    algo_spent_micro: Number(balances.algo_spent_micro || 0),
-    algo_realized_micro: Number(balances.algo_realized_micro || 0)
-  };
-}
-
-function rebuildBalancesFromTrades(taskId, executionMode) {
-  if (!fs.existsSync(TRADES_PATH)) return normalizeBalances();
-  const trades = JSON.parse(fs.readFileSync(TRADES_PATH, 'utf8')).trades || [];
-  const balances = { asset_out_micro: 0, algo_spent_micro: 0, algo_realized_micro: 0 };
-  trades.forEach((trade) => {
-    if (trade.task_id !== taskId) return;
-    const isPaperTrade = Boolean(trade.paper);
-    if (executionMode === 'paper' && !isPaperTrade) return;
-    if (executionMode === 'live' && isPaperTrade) return;
-    const inputAsset = trade.input?.asset_id;
-    const outputAsset = trade.output?.asset_id;
-    const inputAmount = Number(trade.input?.amount_micro || 0);
-    const outputAmount = Number(trade.output?.amount_micro || 0);
-    if (inputAsset === 0) {
-      balances.algo_spent_micro += inputAmount;
-      balances.asset_out_micro += outputAmount;
-    } else if (outputAsset === 0) {
-      balances.asset_out_micro = Math.max(0, balances.asset_out_micro - inputAmount);
-      balances.algo_realized_micro += outputAmount;
-    }
-  });
-  return normalizeBalances(balances);
-}
-
-function loadVirtualWallet(walletId, networkKey, assetIn, assetOut) {
-  if (!fs.existsSync(VIRTUAL_WALLET_DIR)) {
-    fs.mkdirSync(VIRTUAL_WALLET_DIR, { recursive: true });
-  }
-  const walletPath = path.join(VIRTUAL_WALLET_DIR, `${walletId}.json`);
-  if (!fs.existsSync(walletPath)) {
-    const wallet = {
-      id: walletId,
-      created_at: new Date().toISOString(),
-      networks: {
-        [networkKey]: {
-          assets: {},
-          initial_assets: {}
-        }
-      }
-    };
-    fs.writeFileSync(walletPath, JSON.stringify(wallet, null, 2));
-  }
-  const wallet = JSON.parse(fs.readFileSync(walletPath, 'utf8'));
-  if (!wallet.networks) {
-    wallet.networks = {
-      [networkKey]: {
-        assets: wallet.assets || {},
-        initial_assets: wallet.initial_assets || {}
-      }
-    };
-    delete wallet.assets;
-    delete wallet.initial_assets;
-  }
-  wallet.networks[networkKey] = wallet.networks[networkKey] || { assets: {}, initial_assets: {} };
-  fs.writeFileSync(walletPath, JSON.stringify(wallet, null, 2));
-  return { path: walletPath, wallet, networkKey };
-}
-
-function getWalletNetwork(walletHandle) {
-  if (!walletHandle) return null;
-  return walletHandle.wallet.networks[walletHandle.networkKey];
-}
-
-function updateVirtualWalletBalance(walletHandle, asset, deltaMicro) {
-  if (!walletHandle) return;
-  const network = getWalletNetwork(walletHandle);
-  if (!network) return;
-  const key = String(asset.id);
-  const entry = network.assets[key] || { symbol: asset.symbol, decimals: asset.decimals, amount_micro: 0 };
-  entry.symbol = entry.symbol || asset.symbol;
-  entry.decimals = entry.decimals || asset.decimals;
-  entry.amount_micro = Number(entry.amount_micro || 0) + deltaMicro;
-  network.assets[key] = entry;
-  fs.writeFileSync(walletHandle.path, JSON.stringify(walletHandle.wallet, null, 2));
-}
-
-function syncVirtualWallet(walletHandle, assetIn, assetOut, balances) {
-  if (!walletHandle) return;
-  const network = getWalletNetwork(walletHandle);
-  if (!network) return;
-  network.initial_assets = network.initial_assets || {};
-  const ensureEntry = (asset) => {
-    const key = String(asset.id);
-    network.assets[key] = network.assets[key] || { symbol: asset.symbol, decimals: asset.decimals, amount_micro: 0 };
-    network.initial_assets[key] =
-      network.initial_assets[key] !== undefined ? network.initial_assets[key] : network.assets[key].amount_micro || 0;
-    return key;
-  };
-  const keyIn = ensureEntry(assetIn);
-  const keyOut = ensureEntry(assetOut);
-  const lockAssetIn = Boolean(walletHandle.wallet && walletHandle.wallet.lock_asset_in);
-  if (!lockAssetIn) {
-    const assetInInitial = Number(network.initial_assets[keyIn] || 0);
-    const netDeployed = balances.algo_spent_micro - balances.algo_realized_micro;
-    network.assets[keyIn].amount_micro = Math.max(0, assetInInitial - netDeployed);
-  }
-  const outInitial = Number(network.initial_assets[keyOut] || 0);
-  network.assets[keyOut].amount_micro = Math.max(0, outInitial + balances.asset_out_micro);
-  fs.writeFileSync(walletHandle.path, JSON.stringify(walletHandle.wallet, null, 2));
-}
-
-function formatWalletSummary(walletHandle, assetIn, assetOut) {
-  const network = getWalletNetwork(walletHandle);
-  if (!network) return 'n/a';
-  const algoEntry = network.assets[String(assetIn.id)] || { amount_micro: 0 };
-  const outEntry = network.assets[String(assetOut.id)] || { amount_micro: 0 };
-  const format = (micro) => (micro / 1_000_000).toFixed(6);
-  return `${assetIn.symbol || assetIn.id} ${format(algoEntry.amount_micro)} / ${assetOut.symbol || assetOut.id} ${format(outEntry.amount_micro)}`;
-}
-
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 2; i < argv.length; i++) {
-    const token = argv[i];
-    if (token.startsWith('--')) {
-      const eq = token.indexOf('=');
-      if (eq !== -1) {
-        const key = token.slice(2, eq);
-        const value = token.slice(eq + 1);
-        args[key] = value;
-      } else {
-        const key = token.slice(2);
-        const next = argv[i + 1];
-        if (!next || next.startsWith('--')) {
-          args[key] = true;
-        } else {
-          args[key] = next;
-          i += 1;
-        }
-      }
-    }
-  }
-  return args;
 }
 
 if (require.main === module) {
