@@ -76,7 +76,7 @@
     "description": "Voi mainnet (Algorand fork)",
     "wallet_namespace": "voi-mainnet",
     "aliases": ["voi-mainnet", "voi"],
-    "enabled": false,
+    "enabled": true,
     "algod": {
       "url": "https://mainnet-api.voi.nodely.dev",
       "token": "",
