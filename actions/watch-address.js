@@ -168,30 +168,13 @@ function summarize(address, txns) {
   return summary;
 }
 
-async function main() {
-  const args = parseArgs(process.argv);
-  const intervalKey = (args.interval || '1h').toLowerCase();
-  if (!INTERVALS[intervalKey]) {
-    throw new Error(`Unsupported interval "${intervalKey}". Choose one of ${Object.keys(INTERVALS).join(', ')}`);
-  }
-
-  const lookbackSeconds = INTERVALS[intervalKey];
-  const sinceIso = new Date(Date.now() - lookbackSeconds * 1000).toISOString();
-
-  const entries = readAddressBook();
-  const { address, label } = pickAddress(args, entries);
-  const baseUrl = getBaseUrl(args.network || 'mainnet');
-
-  const transactions = await fetchTransactions(baseUrl, address, sinceIso);
-  const summary = summarize(address, transactions);
-
+function formatDigest({ label, address, intervalKey, sinceIso, network, summary, quiet }) {
   const sentAlgo = microToAlgo(summary.sent.microAlgos);
   const receivedAlgo = microToAlgo(summary.received.microAlgos);
-  const quietMode = Boolean(args.quiet);
 
   const lines = [];
   lines.push(`Watching ${label} [${address}] over last ${intervalKey} (since ${sinceIso})`);
-  lines.push(`Network: ${(args.network || 'mainnet').toUpperCase()}`);
+  lines.push(`Network: ${(network || 'mainnet').toUpperCase()}`);
   lines.push('');
   lines.push(`Total transactions: ${summary.total}`);
   lines.push(`Sent: ${summary.sent.count} tx (${sentAlgo} ALGO)`);
@@ -200,11 +183,11 @@ async function main() {
   lines.push('');
 
   if (summary.recent.length === 0) {
-    if (!quietMode) {
+    if (!quiet) {
       lines.push('No activity in this window.');
-      console.log(lines.join('\n'));
+      return lines.join('\n');
     }
-    return;
+    return null;
   }
 
   lines.push('Recent activity:');
@@ -216,10 +199,50 @@ async function main() {
     lines.push(`- [round ${entry.round}] ${entry.direction} ${amountStr} ${verb} ${cp}${note}`);
   });
 
-  console.log(lines.join('\n'));
+  return lines.join('\n');
 }
 
-main().catch((err) => {
-  console.error(err.message || err);
-  process.exit(1);
-});
+async function watchAddress({ contact, address, interval, network, quiet } = {}) {
+  const intervalKey = (interval || '1h').toLowerCase();
+  if (!INTERVALS[intervalKey]) {
+    throw new Error(`Unsupported interval "${intervalKey}". Choose one of ${Object.keys(INTERVALS).join(', ')}`);
+  }
+
+  const lookbackSeconds = INTERVALS[intervalKey];
+  const sinceIso = new Date(Date.now() - lookbackSeconds * 1000).toISOString();
+
+  const entries = readAddressBook();
+  const resolved = pickAddress({ contact, address }, entries);
+  const baseUrl = getBaseUrl(network || 'mainnet');
+
+  const transactions = await fetchTransactions(baseUrl, resolved.address, sinceIso);
+  const summary = summarize(resolved.address, transactions);
+
+  return formatDigest({
+    label: resolved.label,
+    address: resolved.address,
+    intervalKey,
+    sinceIso,
+    network,
+    summary,
+    quiet: Boolean(quiet),
+  });
+}
+
+module.exports = { watchAddress, readAddressBook, pickAddress, getBaseUrl, fetchTransactions, summarize, formatDigest, microToAlgo, decodeNote, INTERVALS };
+
+if (require.main === module) {
+  const args = parseArgs(process.argv);
+  watchAddress({
+    contact: args.contact,
+    address: args.address,
+    interval: args.interval,
+    network: args.network,
+    quiet: Boolean(args.quiet),
+  }).then((digest) => {
+    if (digest) console.log(digest);
+  }).catch((err) => {
+    console.error(err.message || err);
+    process.exit(1);
+  });
+}
