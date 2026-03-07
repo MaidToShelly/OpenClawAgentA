@@ -71,4 +71,22 @@ node actions/trader-manage.js --ignore-pause --verbose
 - `portfolio/trades.json` – global trade log.
 - `logs/trader-manage*.log` – cron output for debugging.
 
+## Network configuration & overrides (new agents start here)
+
+`config/algorand-networks.json` lists every supported network plus an `enabled` flag. **Do not edit it directly.** Instead:
+
+1. Copy only the entries you want to change into `config/algorand-networks.local.json` (create the file if it doesn’t exist).
+2. Set your overrides (e.g., flip `"enabled": true/false`, change algod URLs, etc.).
+3. Save the file – `lib/algorand-network.js` automatically merges the `.local` overrides on the next run.
+
+Example override to enable VOI mainnet and disable testnet/betanet:
+
+```json
+{
+  "voi-mainnet": { "enabled": true },
+  "algorand-testnet": { "enabled": false },
+  "algorand-betanet": { "enabled": false }
+}
+```
+
 Need more detail (architecture diagram, troubleshooting, etc.)? Ask the agent to extend this doc as the workspace evolves. 

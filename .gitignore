@@ -43,3 +43,5 @@ tasks
 roles
 trader
 .bash_history
+transactions
+mcporter.json
