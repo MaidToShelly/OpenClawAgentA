@@ -3,31 +3,12 @@
 const fs = require('fs');
 const path = require('path');
 const { watchAddress, INTERVALS } = require('./watch-address');
+const { parseArgs } = require('../lib/parse-args');
 
 const ROOT = path.join(__dirname, '..');
 const WATCHLIST_PATH = path.join(ROOT, 'address-book', 'watchlist.json');
 const TEMPLATE_PATH = path.join(ROOT, 'address-book', 'watchlist.template.json');
 const STATE_PATH = path.join(ROOT, 'address-book', 'watchlist-state.json');
-
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 2; i < argv.length; i++) {
-    const token = argv[i];
-    if (token.startsWith('--')) {
-      const eq = token.indexOf('=');
-      if (eq !== -1) {
-        const key = token.slice(2, eq);
-        const val = token.slice(eq + 1);
-        args[key] = val;
-      } else {
-        const key = token.slice(2);
-        const val = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
-        args[key] = val;
-      }
-    }
-  }
-  return args;
-}
 
 function loadWatchlist() {
   const source = fs.existsSync(WATCHLIST_PATH) ? WATCHLIST_PATH : (fs.existsSync(TEMPLATE_PATH) ? TEMPLATE_PATH : null);

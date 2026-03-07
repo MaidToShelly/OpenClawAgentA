@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { parseArgs } = require('../lib/parse-args');
 
 const ROOT = path.join(__dirname, '..');
 const BOOK_PATH = path.join(ROOT, 'address-book', 'address-book.json');
@@ -14,26 +15,6 @@ const INTERVALS = {
   '1d': 24 * 60 * 60,
   '30d': 30 * 24 * 60 * 60,
 };
-
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 2; i < argv.length; i++) {
-    const token = argv[i];
-    if (token.startsWith('--')) {
-      const eqIndex = token.indexOf('=');
-      if (eqIndex !== -1) {
-        const key = token.slice(2, eqIndex);
-        const value = token.slice(eqIndex + 1);
-        args[key] = value;
-      } else {
-        const key = token.slice(2);
-        const value = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
-        args[key] = value;
-      }
-    }
-  }
-  return args;
-}
 
 function readAddressBook() {
   if (!fs.existsSync(BOOK_PATH)) {

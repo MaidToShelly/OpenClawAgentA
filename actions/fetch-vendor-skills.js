@@ -4,31 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { parseArgs } = require('../lib/parse-args');
 const { execSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const VENDOR_DIR = path.join(ROOT, 'vendor', 'algorand-skills');
 const DEFAULT_LOCK = path.join(VENDOR_DIR, 'LOCKFILE.json');
 
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 2; i < argv.length; i++) {
-    const token = argv[i];
-    if (token.startsWith('--')) {
-      const eq = token.indexOf('=');
-      if (eq !== -1) {
-        const key = token.slice(2, eq);
-        const val = token.slice(eq + 1);
-        args[key] = val;
-      } else {
-        const key = token.slice(2);
-        const val = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
-        args[key] = val;
-      }
-    }
-  }
-  return args;
-}
 
 async function download(url) {
   const res = await fetch(url);

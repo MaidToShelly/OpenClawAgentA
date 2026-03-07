@@ -2,35 +2,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const { parseArgs } = require('../lib/parse-args');
 
 const ROOT = path.join(__dirname, '..');
 const BOOK_PATH = path.join(ROOT, 'address-book', 'address-book.json');
 const SECRETS_PATH = path.join(ROOT, 'secrets', 'algorand-account.json');
-
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i];
-    if (token.startsWith('--')) {
-      const eqIndex = token.indexOf('=');
-      if (eqIndex !== -1) {
-        const key = token.slice(2, eqIndex);
-        const value = token.slice(eqIndex + 1);
-        args[key] = value;
-      } else {
-        const key = token.slice(2);
-        const next = argv[i + 1];
-        if (!next || next.startsWith('--')) {
-          args[key] = true;
-        } else {
-          args[key] = next;
-          i += 1;
-        }
-      }
-    }
-  }
-  return args;
-}
 
 function readJson(filePath, defaultValue) {
   try {
@@ -90,7 +66,7 @@ async function fetchZeroPaymentSeen(network, targetAddress, senderAddress) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseArgs(process.argv);
   const required = ['id', 'label', 'address'];
   for (const key of required) {
     if (!args[key]) {

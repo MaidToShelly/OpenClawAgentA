@@ -3,29 +3,11 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { parseArgs } = require('../lib/parse-args');
 
 const ROOT = path.join(__dirname, '..');
 const DOWNLOAD_DIR = path.join(ROOT, 'skills-packages');
 
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 2; i < argv.length; i++) {
-    const token = argv[i];
-    if (token.startsWith('--')) {
-      const eq = token.indexOf('=');
-      if (eq !== -1) {
-        const key = token.slice(2, eq);
-        const val = token.slice(eq + 1);
-        args[key] = val;
-      } else {
-        const key = token.slice(2);
-        const val = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
-        args[key] = val;
-      }
-    }
-  }
-  return args;
-}
 
 async function fetchJson(url) {
   const res = await fetch(url, { headers: { 'Accept': 'application/vnd.github+json' } });

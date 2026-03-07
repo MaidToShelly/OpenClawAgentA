@@ -20,6 +20,7 @@ const {
   shouldReenter, resolveMinTradeAmount,
   openPaperPosition, closePaperPosition,
 } = require('../lib/trader-strategy');
+const { parseArgs } = require('../lib/parse-args');
 
 const ROOT = path.join(__dirname, '..');
 const PAUSE_FLAG_PATH = path.join(ROOT, '.trader-paused');
@@ -31,31 +32,6 @@ function requireJson(filePath, label) {
   }
   const raw = fs.readFileSync(filePath, 'utf8') || '{}';
   return JSON.parse(raw);
-}
-
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 2; i < argv.length; i++) {
-    const token = argv[i];
-    if (token.startsWith('--')) {
-      const eq = token.indexOf('=');
-      if (eq !== -1) {
-        const key = token.slice(2, eq);
-        const value = token.slice(eq + 1);
-        args[key] = value;
-      } else {
-        const key = token.slice(2);
-        const next = argv[i + 1];
-        if (!next || next.startsWith('--')) {
-          args[key] = true;
-        } else {
-          args[key] = next;
-          i += 1;
-        }
-      }
-    }
-  }
-  return args;
 }
 
 async function main() {
