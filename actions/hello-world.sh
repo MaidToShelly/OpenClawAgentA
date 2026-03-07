@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SECRETS_FILE="$ROOT_DIR/secrets/algorand-account.json"
 NETWORK="${HELLO_WORLD_NETWORK:-mainnet}"
 RECIPIENT="${HELLO_WORLD_RECIPIENT:-G3MSA75OZEJTCCENOJDLDJK7UD7E2K5DNC7FVHCNOV7E3I4DTXTOWDUIFQ}"
+MCP_SERVER="${HELLO_WORLD_MCP:-ulu-local}"
+PAYMENT_TOOL="${HELLO_WORLD_TOOL:-payment_txn}"
+BROADCAST_TOOL="${HELLO_WORLD_BROADCAST_TOOL:-algod_send_raw_transactions}"
 DEFAULT_NOTE="Hello Shelly"
 
 if [[ -n "${HELLO_WORLD_NOTE:-}" ]]; then
@@ -26,22 +29,36 @@ UNSIGNED_FILE=$(mktemp)
 SIGNED_FILE=$(mktemp)
 trap 'rm -f "$UNSIGNED_FILE" "$SIGNED_FILE"' EXIT
 
-echo "[hello-world] Building unsigned transaction via algorand-mcp.make_payment_txn..."
-mcporter call algorand-mcp.make_payment_txn \
-  from:"$SENDER" \
-  to:"$RECIPIENT" \
-  amount:0 \
-  note:"$NOTE_TEXT" \
-  network:"$NETWORK" \
-  > "$UNSIGNED_FILE"
+ARGS_JSON=$(NETWORK="$NETWORK" NOTE_TEXT="$NOTE_TEXT" SENDER="$SENDER" RECIPIENT="$RECIPIENT" AMOUNT_MICRO="0" PAYMENT_TOOL="$PAYMENT_TOOL" node <<'NODE'
+const payload = {
+  network: process.env.NETWORK,
+  note: process.env.NOTE_TEXT
+};
+
+if (process.env.PAYMENT_TOOL === 'payment_txn') {
+  payload.sender = process.env.SENDER;
+  payload.receiver = process.env.RECIPIENT;
+  payload.amount = process.env.AMOUNT_MICRO;
+} else {
+  payload.from = process.env.SENDER;
+  payload.to = process.env.RECIPIENT;
+  payload.amount = Number(process.env.AMOUNT_MICRO);
+}
+
+process.stdout.write(JSON.stringify(payload));
+NODE
+)
+
+echo "[hello-world] Building unsigned transaction via $MCP_SERVER.$PAYMENT_TOOL..."
+mcporter call "$MCP_SERVER"."$PAYMENT_TOOL" --args "$ARGS_JSON" > "$UNSIGNED_FILE"
 
 echo "[hello-world] Signing locally with scripts/sign_algorand_tx.js..."
 node "$ROOT_DIR/scripts/sign_algorand_tx.js" "$UNSIGNED_FILE" "$SECRETS_FILE" > "$SIGNED_FILE"
 
-read -r TXID <<<"$(node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('$SIGNED_FILE','utf8'));process.stdout.write(data.txID);")"
-SEND_ARGS=$(node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('$SIGNED_FILE','utf8'));const network=process.argv[1];process.stdout.write(JSON.stringify({signedTxns:[data.blob],network}));" "$NETWORK")
+read -r TXID <<<"$(node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('$SIGNED_FILE','utf8'));if(Array.isArray(data.txIDs)){process.stdout.write(data.txIDs[0]);}else{process.stdout.write(data.txID);} ")"
+SEND_ARGS=$(node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('$SIGNED_FILE','utf8'));const blobs=data.blob?[data.blob]:data.blobs;const network=process.argv[1];process.stdout.write(JSON.stringify({signedTxns:blobs,network}));" "$NETWORK")
 
-echo "[hello-world] Broadcasting via algorand-mcp.send_raw_transaction (txID: $TXID)..."
-mcporter call algorand-mcp.send_raw_transaction --args "$SEND_ARGS"
+echo "[hello-world] Broadcasting via $MCP_SERVER.$BROADCAST_TOOL (txID: $TXID)..."
+mcporter call "$MCP_SERVER"."$BROADCAST_TOOL" --args "$SEND_ARGS"
 
 echo "[hello-world] Done. TxID: $TXID"

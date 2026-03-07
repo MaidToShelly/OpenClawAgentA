@@ -30,6 +30,21 @@ if (!secrets.mnemonic) {
   throw new Error('Secrets file must contain a "mnemonic" field');
 }
 
+const { sk } = algosdk.mnemonicToSecretKey(secrets.mnemonic);
+
+if (Array.isArray(txnObj.txns)) {
+  const unsignedTxns = txnObj.txns.map((b64) => algosdk.decodeUnsignedTransaction(Buffer.from(b64, 'base64')));
+  const signedBlobs = unsignedTxns.map((txn) => ({ tx: txn, blob: txn.signTxn(sk) }));
+  const blobs = signedBlobs.map(({ blob }) => Buffer.from(blob).toString('base64'));
+  const txIDs = signedBlobs.map(({ tx }) => tx.txID());
+  if (blobs.length === 1) {
+    console.log(JSON.stringify({ txID: txIDs[0], blob: blobs[0] }, null, 2));
+  } else {
+    console.log(JSON.stringify({ txIDs, blobs }, null, 2));
+  }
+  process.exit(0);
+}
+
 if (!txnObj.sender || !txnObj.receiver) {
   throw new Error('Transaction JSON must include sender and receiver');
 }
@@ -59,7 +74,6 @@ if (txnObj.rekeyTo) {
   paymentParams.rekeyTo = txnObj.rekeyTo;
 }
 
-const { sk } = algosdk.mnemonicToSecretKey(secrets.mnemonic);
 const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject(paymentParams);
 const signedBlob = txn.signTxn(sk);
 
