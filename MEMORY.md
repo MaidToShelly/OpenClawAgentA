@@ -37,6 +37,10 @@ _Long-term notes for Agent → User. Updated 2026-03-06._
 | ulu-local | hello-world action | payment_txn, algod_send_raw_transactions, envoi_purchase_txn |
 | ulu-mcp | Cursor agent (this context) | ARC200, ARC72, HumbleSwap, SnowballSwap, enVoi, Aramid Bridge |
 
+## Pending (platform-level)
+
+- **Reduce tool count:** 22 tools loaded but only ~6 used (exec, read, edit, write, process, web_search). `browser` (2.8K chars) and `message` (4.2K chars) are the biggest dead weight. Needs a `tools.disabled` list in `openclaw.json` under `agents.defaults` — not configurable from the workspace today. Track as an OpenClaw feature request.
+
 ## Lessons Learned
 
 - Workspace has been live on mainnet since 2026-03-04. Always confirm with User before mainnet transactions involving real value.
