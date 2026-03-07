@@ -39,7 +39,8 @@ _Long-term notes for Agent → User. Updated 2026-03-06._
 
 ## Pending (platform-level)
 
-- **Reduce tool count:** 22 tools loaded but only ~6 used (exec, read, edit, write, process, web_search). `browser` (2.8K chars) and `message` (4.2K chars) are the biggest dead weight. Needs a `tools.disabled` list in `openclaw.json` under `agents.defaults` — not configurable from the workspace today. Track as an OpenClaw feature request.
+- **Reduce tool count:** 22 tools loaded but only ~6 used. `browser` (2.8K) and `message` (4.2K) are the biggest dead weight. Needs a `tools.disabled` list in `openclaw.json` — not configurable from workspace.
+- **Reduce skills injection:** 16 skills (~10K chars) loaded by algorand plugin, most are dev-focused (typescript, python, ARC standards). Only `algorand-interaction` and `troubleshoot-errors` are relevant for trading. Needs per-agent skill filtering in plugin config.
 
 ## Lessons Learned
 
