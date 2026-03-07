@@ -121,7 +121,7 @@ function main() {
 
     const argv = buildArgs(entry);
     if (!argv) return;
-    const result = spawnSync(WATCH_SCRIPT, argv, { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [WATCH_SCRIPT, ...argv], { encoding: 'utf8' });
     if (result.error) {
       throw result.error;
     }
